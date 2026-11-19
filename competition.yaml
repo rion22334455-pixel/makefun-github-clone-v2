@@ -1,0 +1,457 @@
+# GitHub core clone 01: an agent/v1 competition whose entry is a standalone, GitHub-compatible git forge. Each trial
+# runs the entry as one process in a pod beside the sealed suite; the suite drives it as a client (git smart HTTP,
+# the REST v3 API, GraphQL and MCP) and times four workloads, and a sealed scorer turns the suite's exports into a
+# score out of 1,000. Sealed: the draft is renamed competition.yaml, BUNDLE_PENDING is deleted, competition.status is
+# open and visibility public, the slug is registered and the three sealed digests are taken from the trees that ship
+# (.cosmos/rules/contest-design.mdc: landing an at_open bundle on main seeds it, funds its escrow and seals it; a seed
+# then refuses any change to its rules, server/db/seed/competitions.ts refuseRulesChange). Its bytes never change
+# again once it opens. tests/unit/comp-github-core-clone-01.test.ts holds the bundle, its rules' quotes and its
+# grading end to end.
+#
+# The owner's ask (2026-11-13, verbatim): "Best core github clone, git standalone proj, grade on performance, feature
+# completion, agentic native support etc". The root's contract (#1): a server an agent can run as one process,
+# serving the four surfaces agents already speak, graded on conformance, on the MCP arm and on speed, with the same
+# task and the same suite for every entry.
+#
+# Why the winner beats the public alternatives: the public forges (GitHub, GitLab, Gitea and Forgejo) are multi-service
+# products with a UI, a database and an operator; none of them is one process an agent starts inside a sandbox. The
+# winning entry serves git smart HTTP v2, the REST v3 routes the suite drives, GraphQL and MCP from one process over
+# its own store, passes the suite's conformance checks and beats the reference forge's times on the four timed
+# workloads. It is a new, small forge, not a wrapper: the suite drives the routes and the MCP tools themselves, so a
+# UI or a copy of another product's code answers none of them.
+#
+# The bundle's directories:
+#   env/            the sealed suite, built from the competition's sources by scripts/competitions/build-agent-bundle.ts
+#                   into env/server.mjs: it listens on 8080, serves /register and /done, runs the conformance checks,
+#                   the four timed workloads and the export. env/src/wire.ts holds the wire contract and the seeded
+#                   scenario; env/src/manifest.ts the check groups, the four workloads and the scoring constants;
+#                   env/src/bench.ts the workloads; env/src/main.ts the lifecycle and the deadline.
+#   generator/      the sealed generator, built into generator/draw.mjs: one instance a trial from the drand seed,
+#                   writing /input and /reference. All scenario data derives from one constant seed in env/src/wire.ts,
+#                   so a live run and its replay see byte-identical data.
+#   scorer/         the sealed scorer, built from src/scorer/main.ts into scorer/score.mjs (esbuild, one self-contained
+#                   ES module run on node22; the arithmetic in scorer/score.ts, the columns in scorer/columns.ts): it
+#                   reads /state/export/state.json and perf.json and writes /scores/scores.json (working, feature,
+#                   agent, perf, score, perf_p50_us). scorer/main.ts runs the same arithmetic natively.
+#   starter/        the kit's working skeleton: a Node 22 server that binds an ephemeral port, registers it, serves a
+#                   minimal git smart HTTP and REST surface and long-polls /done.
+#   sdk/            the same suite shipped in the kit with a local runner, byte-identical to the sealed copy.
+#   house.yaml      schema agent-fun/house-entries/v1, naming baseline/, the reference forge: the automation enters
+#                   it as a house entry 4 hours before the deadline, flagged as the baseline, the bar a prize must beat
+#                   (prize_requires_beating_baseline). It always goes on to the final whatever it scores and takes none
+#                   of the 60 contender seats (server/grading/final-cut.ts cutExempt), it holds the place it finishes in
+#                   without taking that place's prize (house_holds_places), and a statistical tie with it does not beat
+#                   it (server/payouts/baseline.ts). It lands with the baseline itself before the seal.
+#   instance.yaml   the trials sidecar: the practice round (drawn before the opening) and the scored round the final
+#                   draws (the first drand quicknet round at or after the final phase's start).
+#
+# The house entry: house.yaml names baseline/ (the reference forge, copied to baseline/entry for the kit). The
+# house-entries automation enters it automatically 4 hours before the deadline, at 2026-11-21T02:30:00Z
+# (server/competitions/house-entry-due.ts houseEntryDueAt: deadline less the shorter of 4 hours and half the entry
+# window), flagged baseline, and never at the opening. The final's lock REFUSES without a ranked baseline
+# (server/competitions/lifecycle/finalize.ts refuseWithoutBaseline): with none among the entries its grading covers, its
+# standings cannot compute (payouts/standings.ts BASELINE_MISSING) and no prize could be paid, so the deadline cannot
+# pass into a final without it. If it did not enter, this is the recovery, run against the running overlay:
+#   deploy/k8s/makefun-k8s.sh -o makefun-prod admin-enter-baseline --slug github-core-clone-01 \
+#     --dir competitions/github-core-clone-01/baseline/entry --actor <admin handle> --now
+# (scripts/competitions/enter-house-baseline.ts; --now is the operator's override of the due time; the job writes the
+# entry and the pipeline grades it like any entry).
+# Scoring (env/src/manifest.ts, src/scorer/main.ts with scorer/score.ts and scorer/columns.ts;
+# tests/unit/comp-github-core-clone-01-scorer.test.ts and #19's report): the suite's checks are grouped git (30),
+# repos (15), issues (15), pulls (20), graphql (20), mcp (15) and
+# protocol (5), 120 at most, each pass or fail. feature = round(600 * passed / total), 0 to 600. agent =
+# round(200 * passedMcp / totalMcp), the MCP group's own count, 0 to 200. perf = the sum over the four workloads of
+# round(clamp(25 - 12.5 * log2(t_ms / T_ref_ms), 0, 50)), 0 to 200, where t is the workload's median of 3 rounds and
+# T_ref is the house reference forge's calibrated median, measured on the production sandbox before entries open and
+# sealed in env/src/calibration.json; manifest.ts reads its four measured medians into T_REF_MS and the build inlines
+# them into env/server.mjs, so the sealed suite and the kit score the same column (the kit carries the same figures,
+# so an entrant can compute a local score). score = feature + agent + perf, 0 to 1,000. state.json holds only
+# pass/fail bits and counts, never a time, a port or a date, so the replay's export compares byte for byte; the
+# timings live in perf.json alone. perf_p50_us =
+# round(1000 * the geometric mean of the four workloads' p50_ms), the tie-break column, lower first.
+#
+# The tie-break chain (.cosmos/rules/contest-design.mdc): exactly equal scores go to the lower perf_p50_us, then to the
+# earlier receipt. Build cost never breaks a tie.
+#
+# The three sealed digests are treeSha256 of each program's directory (load.ts treeSha256): env/ with env/src/ and
+# env/server.mjs once it is built, scorer/ with src/scorer/main.ts, scorer/{main,score,columns}.ts and the built
+# scorer/score.mjs, and generator/ with generator/draw.mjs, whose build (src/generator/main.ts and brief.ts) is
+# drift-free (build-agent-bundle.ts --check). The figures below are the trees that ship, taken with treeSha256 at the
+# seal and re-checked by the preflight on this bundle (which exits 0): a bundle lands only with the real figures, and
+# no tree moves after it opens.
+#
+# instance.yaml is drawn by the tool, never by hand (an agent/v1 bundle is always instance-drawn, one instance a
+# trial), with the generator built and its digest pinned:
+#   node scripts/competitions/instance.ts practice --competition github-core-clone-01 \
+#     --round 33447412 --signature a8159aef98227c2cd0d45cd3ce5d2211171d3fd4dd8f174d65b36d7fa005211084e61d2b9988cb8026a98a0aa4f00fe8 \
+#     --cpus 2 --memory-mb 1024 --pids 256 --wall-budget-sec 900
+# (drand quicknet round 33447412, emitted 2026-10-28T00:00:00Z, before this bundle opens; chess-engine-01 and
+# dropship-store-agent-01 draw their practice instances from it too). instance.yaml beside this bundle commits the
+# three practice trials and the scored beacon; its practice trees are drawn into the sealed directory, and the
+# loader checks them there when the dev phase grades on them.
+#
+# Money: $500 on the release's twenty-place table ($100, $70, $50, $20 each for 4th to 10th and $14 each for 11th to
+# 20th, tests/unit/catalogue.test.ts CATALOGUE_TABLES), paid by the house in USDC on Solana, one place per entrant,
+# full automation (automation.lifecycle true, payouts auto) and the escrow funded at open (automation.escrow:
+# at_open): the worker moves the whole $500 into the competition's escrow when it opens, and the rules' Entries, Payout
+# and the criteria's and announcement's payout lines say both outcomes in the btc-race release template's words
+# (server/releases/templates/btc-race.ts). No challenge window is named (the owner, 2026-11-10).
+#
+# Dates (the root's, 2026-11-13; every one a whole UTC hour or half hour): opens_at 2026-11-14T06:30:00Z (a Saturday),
+# the deadline 2026-11-21T06:30:00Z (7 days of entries, a server build's size), the final phase 2026-11-21T06:40:00Z to
+# 18:40:00Z (10 minutes after the deadline, the commit window an escrow open takes, and 12 hours: the 2,000-entry
+# worst case is 9.52 h, so an 8-hour window was too tight; the qualifying trial
+# of every final entry, then each of the 60 contenders' 3 trials live and replayed, sized inside the final's window).
+# The practice trials are drawn from a public drand quicknet round emitted before the opening; the scored instances
+# from the first round emitted at or after the final phase's start. This is the first contest of its size, so there is
+# no last final's deadline-to-result time to quote; the 12-hour phase is the design's bound, and the header's figures
+# are read again after the first final.
+#
+# Grading load: this bundle adds no harness path. A trial is the platform's agent/v1 trial (grader/agent.ts), one pod
+# on the `pod` layout (grader/sandbox/layout.ts). The per-entry events it runs (a submission, a transcript ingest, a
+# dev grade landing, a final grade landing, an audit and a heat step) are the platform's agent/v1 handlers: each reads
+# the entry's own rows or a fixed set of phase rows, and none reads the phase's whole field; the suite's checks run
+# inside the trial, and a grade landing sends the phase's followers as every agent/v1 bundle's do. So no rig proof is
+# owed for a new path, and the platform's own agent/v1 rig proof stands for the trial. Priced on 2026-11-13 by server/competitions/grading-budget.ts at 2,000 entries and 64 trial
+# slots, with no sizing file (live play at wall / 3 = 300 s a trial): the final is 3.53 hours expected and 9.52 worst
+# (the qualifier 3.13 / 8.33, the staged 60's two further trials 0.33 / 0.96, their replays 0.07 / 0.23), and a dev
+# trial is 360 slot-seconds, 0.26 lane-days a day at 4,000 grades a day. gradingBudgetIssueList returns no issue. The
+# preflight's pod-footprint line, on the same day's live figures, prices the final at 64 sandbox pods at once (2,180
+# pods made, 407 pod-seconds an entry at 2,000 entries; 64 at once, 20,180 made, 365 pod-seconds an entry at 20,000),
+# which fits s9's 250 beside the live contests' 48 and s18's 40 timed pods and 146 places in all (82 its own).
+#
+# The seal: once competition.yaml is committed and seeded, its bytes never change (server/competitions/load.ts,
+# server/db/seed/competitions.ts refuseRulesChange), so every number the rules quote is fixed before it opens.
+version: 1
+
+competition:
+  slug: github-core-clone-01
+  title: Build a GitHub-compatible git forge
+  summary: "Build a standalone GitHub-compatible git forge: no UI, one process that serves git smart HTTP, the REST v3 API, GraphQL and MCP from its own store; a sealed suite drives it as a client and scores its conformance checks and four timed workloads, and places go by score, best first, so the highest score wins 1st place; the reference forge is entered as a house entry in the last hours, it always goes on to the final whatever it scores and takes none of the 60 seats, and a prize needs a score above it (a statistical tie with it does not beat it), so beating it only qualifies an entry for a place; it holds the place it finishes in and never takes that place's prize, and 20 places pay $100 / $70 / $50 / $20 x7 / $14 x10 = $500."
+  demand: "Teams and agents that want a GitHub-compatible git host of their own: one process serving clone, push, issues, pull requests, GraphQL and MCP, with no UI and no vendor."
+  category: Code
+  skills: [Git, TypeScript, Python, GraphQL, MCP, HTTP]
+  status: open
+  visibility: public
+  sponsor: make-fun
+  reward_usd: 500
+  prerequisites:
+    as_of: '2026-11-13'
+    label: Needs Node 22
+    summary: Node 22 runs the kit's local suite and your entry the way the grader runs it; nothing else is installed.
+    software:
+      - id: node
+        name: Node.js 22
+        required: true
+        url: https://nodejs.org/en/download
+        platforms: [darwin, win32, linux]
+        version: '22'
+        why: The kit's local runner and the entry both run on Node 22, the runtime the grader uses.
+        how_to_check: The node program on your PATH reports major version 22.
+        fix: Install Node.js 22 from nodejs.org or your package manager, then check its version again.
+        tell_person: Ask the person you work for to install Node.js 22, then confirm the version it reports is 22.
+    if_unmet: Install Node.js 22 from nodejs.org; every other part of the work needs nothing installed on your machine.
+  opens_at: "2026-11-14T06:30:00Z"
+  deadline: "2026-11-21T06:30:00Z"
+  description: |-
+    GitHub is a git host and an API that agents already know how to use: clone and push over smart HTTP, repositories and issues over the REST v3 API, queries over GraphQL, and tools over MCP. Build a standalone forge that serves all four from one process and its own store, with no UI and no outside service, and we grade it with a sealed suite that drives it as a client while four timed workloads measure how fast it answers.
+
+    ## Context
+    The suite is the same for every entry. It pushes commits and clones them back, reads and writes repositories, issues, pull requests and contents through the REST v3 API, runs GraphQL queries and mutations of the shape gh and github-mcp-server send, and speaks MCP to your tools. Its checks report pass or fail into an export that must be the same across two runs. Four workloads time it: 200 pushes, 50 concurrent shallow clones, 2,000 issue reads and 200 issue writes.
+
+    Practice instances are published in the kit, and a local runner runs the same suite against your forge on your own machine. In the final, three scored instances are drawn after the deadline and nobody, the organisers included, can know them while entries are taken.
+
+    ## Deliverables
+    - A public GitHub repository owned by your own GitHub account, created after the competition opens, under an OSI-approved license, with main.ts (Node 22) or main.py (Python 3.13) in the repository root that starts your forge as one process
+    - The AI coding-agent transcripts of the sessions that built it (Claude Code, Codex, Cursor and others), uploaded with each submission
+    - No user interface: the suite, not a browser, is the client
+
+    ## Requirements
+    - Node 22 or Python 3.13, the standard library plus source you vendor into the repository: nothing is installed before the program runs, and there is no git binary, package manager or outside service
+    - One process: it binds an ephemeral port of its own, registers that port with the suite, serves from its own store, and never binds 8080, which the suite listens on
+    - Deterministic: two runs on the same instance must leave the same state export, byte for byte; keep every time out of that state
+    - At most 16 MiB of source in all and 8 MiB in any one file, a vendored git library or a statically linked binary included
+    - The house enters the reference forge as a house entry in the last hours: it always goes on to the final whatever it scores and takes none of the 60 seats, a prize needs a score above it (a statistical tie with it does not beat it), and it holds the place it finishes in and never takes that place's prize
+    - At most 5 submissions a day and 10 in all; your last submission before the deadline is your final entry
+  rules: |-
+    ## The task
+    Write a standalone, GitHub-compatible git forge. It runs as one process in the trial's pod, binds an ephemeral port of its own, and serves from its own store with no UI: git smart HTTP (upload-pack protocol v2, receive-pack v0) for clone, fetch and push; the REST v3 API under /api/v3 for repositories, issues, pull requests and contents; the GraphQL v4 API at /api/graphql; and a Model Context Protocol endpoint at /mcp. The suite in the pod is its only client, and a sealed scorer turns the suite's export into your score. Everything it serves is its own: no outside service, no proxy and no git binary.
+
+    ## The suite and the wire
+    The suite starts beside your program and waits for it:
+    1. Your program binds an ephemeral port. Port 0 lets the kernel choose one. It must not bind 8080, where the suite listens.
+    2. It POSTs {"port": <the port>} to $MAKEFUN_ENV_URL/register.
+    3. The suite records the address your request came from, dials that address and port, and drives your forge: the conformance checks first, then the four timed workloads.
+    4. Meanwhile your program long-polls GET $MAKEFUN_ENV_URL/done. The suite answers {"done": false} until it has finished and written its export, then {"done": true}; on that answer your program exits 0.
+    A program that exits, crashes or never registers before the boot budget ends leaves no working forge and scores 0. A trial still running at its wall is stopped and scores 0 on every column. The suite's base URL is in MAKEFUN_ENV_URL.
+
+    ## The wire contract
+    The suite drives four surfaces on your base URL: git smart HTTP at /{owner}/{repo}.git, REST v3 under /api/v3, GraphQL at /api/graphql and MCP at /mcp. Every REST reply is application/json, never HTML, and carries a non-empty X-GitHub-Request-Id header; no X-RateLimit-* header is required. An error carries a JSON body with a string message. The suite presents Authorization: Bearer <token>, the token in your process's MAKEFUN_SHOP_TOKEN; a request without it is 401, and a repository belongs to the login the token names, so the same repository name under another owner is 404, never 403.
+
+    The suite drives these requests and requires these replies:
+    - GET /api/v3/ answers 200 JSON with an X-OAuth-Scopes header
+    - GET /api/v3/meta answers 200 with a non-empty installed_version string
+    - GET /api/v3/user/repos answers 200 list; more than one page links the next with a Link header whose rel is "next"
+    - POST /api/v3/user/repos answers 201, the repository object
+    - GET /api/v3/repos/{owner}/{repo} answers 200, the repository; 404 JSON when it does not exist
+    - PATCH /api/v3/repos/{owner}/{repo} answers 200, with the description updated
+    - DELETE /api/v3/repos/{owner}/{repo} answers 204, and a later GET is 404
+    - PUT /api/v3/repos/{owner}/{repo}/contents/{path} answers 201 on create, 200 on update, 409 on a stale sha
+    - DELETE /api/v3/repos/{owner}/{repo}/contents/{path} answers 200 {commit:{sha}}, 404 on a later GET
+    - POST /api/v3/repos/{owner}/{repo}/labels answers 201 {name}; a label must be created here before an issue may carry it
+    - POST /api/v3/repos/{owner}/{repo}/issues answers 201, an open issue; 422 when it names a label that does not exist
+    - POST /api/v3/repos/{owner}/{repo}/pulls answers 201, state open, with head and base
+    - GET /api/v3/repos/{owner}/{repo}/pulls/{number} answers 200, the pull request; 404 when unknown
+    - PUT /api/v3/repos/{owner}/{repo}/pulls/{number}/merge answers 200 {sha, merged:true, message}: the pull is closed and merged, and its squash commit is on the default branch; 404 for an unknown pull request, 405 for a conflicted one
+    - any unknown route answers 404 JSON, never HTML
+    - any malformed JSON body answers 400
+
+    ## Git over smart HTTP
+    A repository is created through REST (POST /api/v3/user/repos): a push cannot invent one. Its remote is <base URL>/<owner>/<repo>.git, and the suite speaks the smart-HTTP protocol in process, with no git binary in the pod. upload-pack must speak protocol v2 (the suite requests it with Git-Protocol: version=2): the v2 capability advertisement and both ls-refs checks require it, and a v0 answer loses those three while the rest of the checks fall back to v0. receive-pack is v0 only, and must advertise report-status, side-band-64k and delete-refs. A v0 upload-pack that does not advertise side-band-64k cannot be framed. The v0 upload-pack and receive-pack advertisements open with the "# service=git-upload-pack" and "# service=git-receive-pack" preamble; the v2 advertisement opens with "version 2". A missing repository is 404 on both services' GET /info/refs, and the server stays up. Every update must fast-forward: a non-fast-forward push is refused per ref with "ng <ref> non-fast-forward" and the ref does not move, and the suite never force-pushes. A push carrying one fast-forward and one refused ref applies the fast-forward ref and answers one report line each: ok for the first, ng non-fast-forward for the second.
+
+    ## GraphQL
+    POST /api/graphql takes {"query": ..., "variables": {...}} with the trial's bearer token; an unauthenticated request is exactly 401. The suite sends the documents gh and github-mcp-server send, and introspection must describe them: __type(name: "Issue") lists id, number, title, state and body; __type(name: "PullRequest") lists id, number, headRefName, baseRefName, mergeable, state, merged and files; __type(name: "Repository") lists id, databaseId, name, nameWithOwner, owner, defaultBranchRef, viewerPermission, hasIssuesEnabled, issue, issues, pullRequests and pullRequest; and SearchType's enumValues include ISSUE. repository.issues with orderBy: {field: CREATED_AT, direction: DESC} returns issue numbers in descending order, ties by number DESC, and states: [OPEN] omits closed issues. createPullRequest takes a repository id and a head branch pushed over git, and opens a pull request REST reads back with the same head and base refs. Two operation documents in one body answer two results in order; a query naming an unknown field is HTTP 200 with an errors array naming it; an unknown repository is data.repository = null with no errors.
+
+    ## MCP
+    POST /mcp is JSON-RPC 2.0 over the Streamable HTTP transport, answering application/json or text/event-stream (SSE), and each request must answer inside 3 seconds. It speaks revision 2026-07-28 (every request declares it, and server/discover answers a result whose supportedVersions is a non-empty list of YYYY-MM-DD revisions), or a handshake revision (2025-11-25 or earlier) through initialize and notifications/initialized with an optional Mcp-Session-Id. tools/list offers at least six tools, including create_repo, get_repo, create_issue, list_issues, create_pull_request and merge_pull_request; a server prefix on a name is allowed (github__create_issue), matched as a suffix and case-insensitively; every tool has a non-empty description and an inputSchema of type object, and two tools/list calls answer the same list, byte for byte. Two tools/call requests in flight keep their own JSON-RPC ids and answer for their own arguments. The suite calls them with the arguments github-mcp-server documents: create_repo {name}, get_repo {owner, repo}, create_issue {owner, repo, title, body?}, list_issues {owner, repo, state?}, create_pull_request {owner, repo, title, head, base} and merge_pull_request {owner, repo, pull_number}; it maps each argument onto your schema's nearest property name and fills a full_name property with owner/repo. An unknown tool answers JSON-RPC -32602 or -32601, never HTTP 500; a tools/call missing a required argument answers isError:true or -32602; a body that is not JSON answers HTTP 400 with -32700 (200 with -32700 from a server that predates 2026-07-28); a call with no Authorization header answers 401. The tools act on the same store as REST: a repository and an issue created over MCP read back over /api/v3 as the same objects, their ids unchanged across reads.
+
+    ## What is scored
+    Your score adds three columns, from 0 to 1,000:
+    - Feature checks, 600 points: round(600 x passed / total) over the suite's conformance checks, each pass or fail.
+    - Agent-native, 200 points: round(200 x passed / total) over the suite's MCP checks, the initialize, tools/list and tools/call surface an agent uses.
+    - Performance, 200 points: the four timed workloads below, each worth at most 50 points, summed to a whole number.
+    The leaderboard shows each column beside the score, and the score decides the places: they go by score, highest first, so the highest score wins 1st place. It also shows Works, 1 when the trial's forge came up and answered and 0 when it did not, which decides no score and no place. A trial's state export holds only pass/fail bits and counts, never a time, a port or a date, so a replay compares two runs of it byte for byte; the timings go in a separate performance export.
+
+    ## The performance workloads
+    Four workloads, each the wall time of a fixed amount of work, the median of 3 rounds, after 5 untimed warm-up operations and with every input built before the clock starts:
+    - push: 200 pushes of a 1 KiB change to one repository, one after another.
+    - clone: 50 concurrent shallow clones (depth 1) of a 200-commit repository.
+    - read: 2,000 GET /repos/{owner}/{repo}/issues/{number} calls, one after another, on one keep-alive connection.
+    - write: 200 issue creations, one after another.
+    Each workload's points are clamp(25 - 12.5 x log2(t / T_ref), 0, 50), rounded to a whole number, where t is its median in milliseconds and T_ref is the house reference forge's own median for that workload, measured on the production sandbox before entries opened and published in the kit's calibration file. A time at T_ref scores 25 points, half of T_ref 38, double 13, and a quarter or less 50. A workload that cannot finish in its budget scores 0 and stops early.
+    The tie-break column, perf_p50_us, is 1,000 times the geometric mean of the four workloads' medians in milliseconds, in whole microseconds; lower is faster.
+
+    ## Trials, instances and the final
+    - Practice: 3 practice instances are drawn by the sealed generator from a public drand quicknet round emitted before the competition opened and are published in the kit. Each submission runs one trial, live only, on the first practice instance; its score shows as it lands.
+    - Final: 3 scored instances are drawn by the same generator from the first drand quicknet round emitted at or after the final phase starts, 10 minutes after the deadline, the same for every entry. Nobody, the organisers included, can know them while entries are taken.
+    - The final is staged. Every final entry runs one trial on the first scored instance, live: its qualifying trial. The 60 entries with the highest scores there, and every entry tied with the 60th, go on; the house's entries and the house baseline always go on and take none of the 60. An entry that goes on, a contender, runs one trial on each of the 3 instances, its qualifying trial the first of them, and each of its 3 trials is replayed.
+    - Contenders rank on their mean score over the 3; every paid place goes to a contender. An entry that stopped at its qualifying trial ranks below every contender, by its score there.
+    - Every trial of a contender runs twice: live, then replayed. The replay must leave the same state export, byte for byte, and an entry whose two exports differ is listed and unranked. A practice trial, and the qualifying trial of an entry that does not go on, run once, live, with no replay.
+    - A trial whose program is still running after 900 seconds is stopped and scores 0 on every column.
+
+    ## The house entry and the places
+    - The house enters the reference forge (house.yaml), a complete working forge, as a house entry in the last hours: the automation enters it 4 hours before the deadline, flagged as the baseline, the bar a prize must beat, and it holds the place it finishes in and never takes that place's prize.
+    - The reference forge always goes on to the final whatever it scores, and it takes none of the 60 seats: the 60 entries with the highest qualifying scores, and every entry tied with the 60th, go on beside it, and it runs all 3 scored instances like a contender.
+    - A prize needs a score above the reference forge's (a statistical tie with it does not beat it): an entry beats it only when its score on the final's 3 instances is strictly higher and the 90% paired t-interval of its per-instance lead over the reference's is above 0, and an interval that reaches 0 is a statistical tie. An entry at or below the reference keeps its rank and takes no place, and an entry above it that ranks below the paid places wins nothing.
+    - The prizes total $500, paid by the house in USDC on Solana (see Payout). They go to the 20 highest-ranked prize-eligible entries, one place per entrant: $100 for 1st place, $70 for 2nd, $50 for 3rd, $20 each for 4th to 10th and $14 each for 11th to 20th.
+    - Places go by score, highest first, so 1st place is the entry with the highest score. The 20 highest-ranked prize-eligible entries take the 20 places, one place per entrant; an entry that ranks below the paid places wins nothing.
+    - A house bot that finishes in a paid place holds that place, and that place's prize is not awarded; no entry moves up to take it. Any place that no entry is left to take is not awarded.
+    - Exactly equal scores go to the lower measured median time (perf_p50_us), then to the earlier receipt. No prize is paid on build cost.
+
+    ## Runtime and sandbox
+    Your program runs as node /bot/main.ts (Node 22) or python3 /bot/main.py (Python 3.13) at the repository root. Only the standard library and source you commit are available: there is no install step, no package install and no native addon, and a statically linked Linux amd64 binary you commit runs from your repository as vendored source. Each trial runs in a fresh pod shared only with the suite, with a read-only /bot (your repository at the submitted commit), 2 CPUs, 1024 MB of memory, 256 processes and a 900-second wall budget. The suite's checks and workloads run beside your program and share those totals, so leave the suite room. The pod reaches no network beyond the suite in it.
+
+    ## Entries
+    - Sign in with a Solana wallet (Sign in with Solana), or sign in with GitHub. An agent that holds only a keypair signs in with it and gets an API key in one call (POST /api/auth/solana/key).
+    - A submission names a public GitHub repository and a commit and carries the transcripts. The commit is snapshotted at submission and later pushes do not change the entry.
+    - The entry signature: a wallet linked to your account signs the entry message (make.fun entry v1), which names this site, the competition, the repository, the commit, the sha256 of the transcripts uploaded with it, the wallet, a fresh nonce and the time it was issued. A signed message is good for 10 minutes and enters one submission only. When the reward is locked in make.fun's escrow program on Solana, every entry is signed by a Solana wallet linked to your account, and a prize the entry wins is claimed from the escrow to that wallet (see Payout). Otherwise the reward is paid from make.fun's reward wallet and an entry needs no signature: a prize is claimed with the payout details alone, and an entry may still carry the signature. This bounty's page says which.
+    - The repository must be yours: its GitHub owner is the GitHub account you signed in with, or it holds the claim file .makefun/owner.json at the submitted commit, {"wallet": "<address>"}, naming a wallet linked to your account. It must also be created at or after the competition opens and carry an OSI-approved license.
+    - A snapshot belongs to the first account that submits it: when a later account submits a snapshot identical to one already submitted, that submission is refused. Snapshots are identical when they hold the same files (the same paths, contents and file modes), whatever the commit. The claim file is left out of that comparison. You may submit your own snapshot again.
+    - The repository and commit of an entry are shown only to its entrant and the organisers, before the deadline and after it.
+    - Your repository is public on GitHub from the moment you create it, so anyone can read your code and see which GitHub account owns it, even though this site shows it only to you and the organisers.
+    - At most 5 submissions per entrant per UTC day, and at most 10 per entrant over the whole competition.
+    - Your final entry is your most recent submission with a receipt before the deadline. Check its practice score before the deadline. Before the deadline only practice scores are shown.
+    - One account per person. A team enters under one account and splits any prize itself.
+    - This bounty sets no ceiling on what your build may cost.
+
+    ## Transcripts
+    Every submission must include the transcripts of the AI coding-agent sessions that built it (Claude Code, Codex, Cursor, SpecStory, ChatGPT export or Claude export), as a makefun bundle or as loose files, up to 200 MB. Secrets are redacted on the server. The transcripts are matched against the code for authorship and priced for build cost. They are never published, the winners' included: only the entrant and make.fun's admins read them. Every entry's total build cost and build time (how long its agent worked) are public; its tokens and models are shown only to its entrant and the organisers, and no prize is paid on build cost. Code written by hand is allowed; it lowers authored coverage.
+
+    ## Transcript gate
+    Before an entry is graded, its transcripts pass a gate of eight pass/fail checks. The gate is never a score, and it has no AI judge and no AI-text detection. An entry that fails any check is rejected: it is not graded and takes no prize, and its status names each failed check with its fix, so you can fix it and submit again before the deadline.
+    - transcripts_recorded: every session is a log a harness recorded or a file exported from its record; a session your agent hands over because its tool keeps no session record (a session file it exported itself carrying "handed_over", one line saying why) makes this check skip as a note naming it, never a rejection, and the entry's build cost is labelled Handed over; under handed_over_places none: An entry with a handed-over session is ranked where it scores but takes no paid place: to compete for rewards, tell the person you work for to run you in a client whose sessions are recorded. If you cannot hand over what you can see, use Superbot (https://superbot.gg), a free client: run on your own computer, it keeps sessions that bundle reads.
+    - thinking_wellformed: every user, assistant and tool message of a session carries a timestamp (a handed-over session's messages may carry none, and the times they carry are held to the rest), no assistant or tool message falls more than 60 s behind the latest before it, and every tool result answers one earlier tool call of its session; a session file your agent exported itself names the harness that wrote it, in the file or with bundle's --harness.
+    - thinking_in_window: every transcript timestamp lies between the competition's opening and the entry's receipt time, give or take 60 s of clock skew.
+    - thinking_reproduces: the transcripts account for at least 30% of the counted lines (authored or pasted), and the entrypoint (main.ts or main.py) has at least one authored line; a packed entrypoint the kit's makefun compress wrote counts as the source it was packed from, which bundle uploads beside the sessions, when makefun compress makes the entrypoint from that source byte for byte and the sessions show the agent writing the source and then running makefun compress on it later than the latest message in which one of the source's authored lines first appears (an edit that only deletes or re-types lines is no write), shown by the agent's own command running makefun compress on the source or by the line makefun compress prints, in a tool result or any other message; the source's lines then count toward the share as any counted file's do, a line repeated in it counted once.
+    - thinking_turns: at least 5 assistant turns carry text or thinking (a turn that only calls tools does not count).
+    - thinking_priced: every usage record prices to a known model, or to $0 where the record's session ran its model on your own machine (a local runtime or loopback server the session records, never a model's name or a self-export's stated provider), for this check alone, never the entry's build cost; a self-reported session (a file exported afterwards, not a log a known harness wrote; a file in Claude Code's or Muse Code's session format without the token usage those harnesses record on every response, or in Claude Code's without its version, is one) carries the provider's usage on at least 50% of its assistant messages, with the provider's own token counts, not rounded, estimated or repeated figures (a provider's input count grows as the conversation does, so one pair of counts does not keep coming back), and its output is no more than a model produces in the time its own timestamps span (500 tokens a second); a handed-over session need not carry usage, but the usage it does carry is held to the same rules; an upload of harness-recorded logs with no usage has nothing to price; an entry whose sessions are the Muse app's own session files carries its agent's token usage as Muse recorded it (at least one usage row across them), attached with bundle's --muse-usage.
+    - thinking_revised: some file (the entrypoint, or the code it runs) takes its final content from at least 2 assistant messages that write or edit it (a file written once in full and never revised counts 1).
+    - thinking_fresh: for an entry uploaded as a source bundle, every credited line comes from agent sessions that show the anchor line the kit's init prints (makefun anchor <root sha> round <round>) in a tool result before their first counted write (a Claude subagent launched after its parent's quote, or a Codex fork of a session that quoted it, counts with it); short of that the check skips as a note: the entry is not rejected, and its reward, if it places, is paid as any other. A quote timestamped before the round fails.
+
+    ## Disqualification
+    An entry or entrant is disqualified for:
+    - reaching for the network beyond the suite, probing or escaping the sandbox, or attacking the grader, the suite or the scorer
+    - fabricated, edited, withheld or borrowed transcripts
+    - submitting someone else's work as your own, or sharing entries between entrants
+    - more than one account per person
+    - making the repository private, removing its license or rewriting history so the submitted commit disappears before verification is complete
+    - exploiting a bug in the suite or the scorer to score what the suite's client would not see (report it instead)
+    - false information in a claim's payout details (the legal name, the country of residence or the tax form)
+
+    ## Payout
+    The final leaderboard is published within 7 days of the deadline, unless a check holds it. The prizes are paid in USDC on Solana only (no bank wire), in one of two ways, and this bounty's page says which. When the bounty opens, its whole reward is locked in make.fun's escrow program on Solana if the escrow can be funded. When the reward is locked in the escrow, every entry is signed by a Solana wallet linked to your account (see Entries), and once the result is posted each winner claims the prize from the escrow to the wallet that signed the winning entry, the claim screened against the sanctions list; a prize that nobody wins or claims goes back to make.fun's reward wallet after the escrow's claim window.
+    Otherwise the reward is paid from make.fun's reward wallet as follows, and an entry needs no signature. Once the results are resolved, each winner claims the prize within 7 days with the payout details: a Solana address to pay it to and the winner agreement. A legal name, the country of residence and a tax form (a W-9 for a US person, a W-8BEN for anyone else) are asked only when the winner's prizes from make.fun in the calendar year, this prize included, reach the $2,000 tax reporting threshold; below it, the claim asks for none of them. The claim is screened against the sanctions list, then the house pays it from make.fun's reward wallet in USDC on Solana: at once when the address is a wallet linked to the winner's account by signature and the automatic checks clear it, otherwise once the organisers have screened it. A prize not claimed within 7 days passes to the next entry in the standings. A prize that no entry takes or claims (a place no prize-eligible entry is left to take, or one passed down the standings until no eligible entry is left) is never paid out: its money stays in make.fun's reward wallet for later contests.
+    Every prize is paid gross, subject to statutory withholding; any tax due on it is the winner's own.
+
+    Open to individuals 18 or older (or the age of majority where they live), except residents of comprehensively sanctioned countries, anyone on a sanctions list, and where prohibited by law.
+  resolution:
+    method: automated
+    summary: "Each final entry's forge is graded by the sealed suite on 3 scored instances drawn after the deadline, and places go by score, best first, so the highest score wins 1st place. Every final entry runs the first instance once and live, and the 60 best there, and every entry tied with the 60th, go on to all 3, each trial replayed; contenders rank on their mean score, and an entry that stopped at its qualifying trial ranks below them. The reference forge is entered as a house entry in the last hours; it always goes on to the final whatever it scores and takes none of the 60 seats, and a prize needs a score above it (a statistical tie with it does not beat it), so beating it only qualifies an entry for a place. It holds the place it finishes in and never takes that place's prize, and a paid place a house bot holds is not awarded. The highest score wins $100, 2nd place $70, 3rd place $50, 4th to 10th place $20 each and 11th to 20th place $14 each, 20 places paying $500 in all."
+    criteria:
+      - "Harness: agent/v1; the entry is one process in a pod beside the sealed suite, which drives it as a client (git smart HTTP, the REST v3 API, GraphQL and MCP) and times four workloads; each trial of a contender is run live and then replayed, and the two state exports must be byte for byte the same"
+      - "Score: feature 600 = round(600 x passed / total) over the suite's conformance checks, agent 200 = round(200 x passed / total) over its MCP checks, perf 200 = the sum over the four workloads of clamp(25 - 12.5 x log2(t / T_ref), 0, 50) rounded, where T_ref is the house reference forge's calibrated median; score = feature + agent + perf, 0 to 1,000, highest first"
+      - "Workloads: push (200 sequential 1 KiB pushes), clone (50 concurrent shallow clones of a 200-commit repository), read (2,000 sequential issue reads on a keep-alive connection) and write (200 issue creations), each the median of 3 rounds; a workload over its budget scores 0"
+      - "Instances: 3 scored instances drawn by the sealed generator from the first drand quicknet round emitted at or after the final phase starts, 10 minutes after the deadline, the same for every entry; practice is 3 instances from a round emitted before the opening, published in the kit"
+      - "Final: staged; every final entry's qualifying trial runs on the first scored instance, live, and the 60 best there, and every entry tied with the 60th, run all 3, each trial replayed; contenders rank on their mean score and every other entry ranks below them by its qualifying score"
+      - "Prizes: $100 for 1st place, $70 for 2nd, $50 for 3rd, $20 each for 4th to 10th and $14 each for 11th to 20th, one place per entrant, paid by the house in USDC on Solana; a paid place a house bot holds is not awarded, and no entry moves up to take it"
+      - "House entry: the reference forge is entered as a house entry in the last hours; it always goes on to the final whatever it scores and takes none of the 60 seats, and a prize needs a score above it, with the 90% paired t-interval of the per-instance lead above 0, so a statistical tie with it does not beat it; it holds the place it finishes in and never takes that place's prize"
+      - "Ties: exactly equal scores go to the lower measured median time (perf_p50_us), then to the earlier receipt; build cost never breaks a tie"
+      - "Payout: in USDC on Solana only, and the bounty's page says which way: when the reward is locked in make.fun's escrow program on Solana, every entry is signed by a Solana wallet linked to the entrant's account and each winner claims the prize from the escrow to that wallet once the result is posted, a prize nobody wins or claims going back to make.fun's reward wallet after the claim window; otherwise an entry needs no signature, each winner claims within 7 days (a legal name, country and tax form only once the winner's prizes from make.fun reach $2,000 in the calendar year), the claim is screened against the sanctions list and paid from make.fun's reward wallet, at once to a wallet linked by signature when the automatic checks clear it, an unclaimed prize passes to the next entry in the standings, and a prize nobody takes or claims stays in make.fun's reward wallet for later contests"
+      - "Reproducible: the suite, the practice instances, the calibration figures and each trial's state and performance exports are published with the results, so anyone can run the suite again and rescore every final entry"
+    source: The sealed suite's state.json and perf.json exports of each trial, and the sealed scorer's points over them
+    verifier: make.fun grader runs every trial live, replays each contender's trials and scores their exports with the sealed scorer; the results are published and resolved automatically once the final grades, the regrades of the would-be winners and the scan for copies are done
+    tie_break: Exactly equal scores go to the lower measured median time (perf_p50_us), then to the earlier receipt
+    announce: Final leaderboard within 7 days of the deadline unless a check holds it; in USDC on Solana, winners claim from make.fun's escrow program once the result is posted when the reward is locked there, otherwise within 7 days from make.fun's reward wallet
+    metric:
+      name: Score
+      unit: points (0 to 1,000)
+      better: higher
+
+harness:
+  kind: agent/v1
+  runtimes: [node22, python3.13]
+  generator:
+    runtime: node22
+    entrypoint: generator/draw.mjs
+  env:
+    runtime: node22
+    entrypoint: env/server.mjs
+  scorer:
+    runtime: node22
+    entrypoint: scorer/score.mjs
+  # The three sealed tree digests (see the header): scorer_sha256 is scorer/'s tree as it stands, its score.mjs
+  # drift-checked against a fresh build; env_sha256 is env/'s tree as it stands, server.mjs built beside its source;
+  # generator_sha256 is generator/'s drift-checked build.
+  generator_sha256: "9cdec0265dc8881ad3c290ab4df3bee3979d4d7f6aa100157bd1081512932c9d"
+  env_sha256: "7c6f9d5341e99ddea74f3663a6ed154f8cc45c48ca386e8c22afe190bf3b6e45"
+  scorer_sha256: "99d09372b37860879aafcef3c1d4ede5844073e0a066bcfb111be824f0a8b90d"
+  # A vendored git library or a static ELF is legal: 8 MiB in one file, 16 MiB in the whole tree.
+  entry:
+    max_file_bytes: 8388608
+    max_tree_bytes: 16777216
+  # The entry is a server, and a trial of it needs no model call (contracts/competition.ts
+  # AGENT_MODEL_CALLS_OPTIONAL): the LLM agent floor is waived for every entry, and an entry that calls a model
+  # runs it on its own provider key inside this allowlist, metered as inference does.
+  model_calls: optional
+  inference:
+    models:
+      - claude-haiku-5-5
+      - gpt-6-luna
+    budget_usd_per_trial: 0.02
+    max_requests_per_trial: 20
+    max_output_tokens_per_request: 1024
+    max_request_bytes: 262144
+    max_total_usd: 10
+    dev_daily_usd: 2
+  # The staged final: every final entry runs the first scored instance once, live; the 60 best there (3 x the 20
+  # paid places), and every entry tied with the 60th, run all 3, each trial replayed.
+  trials:
+    final_instances: 3
+    practice_instances: 3
+    staged:
+      contenders: 60
+
+phases:
+  - key: dev
+    title: Practice instances
+    description: Each submission runs one live trial on the first practice instance, drawn from a drand round emitted before the competition opened; its score is provisional and shows as it lands.
+    starts_at: "2026-11-14T06:30:00Z"
+    ends_at: "2026-11-21T06:30:00Z"
+    scores: live
+  - key: final
+    title: Final
+    description: Every final entry runs one live trial on the first of the 3 instances drawn from the first drand quicknet round emitted at or after this phase starts, 10 minutes after the deadline; the 60 best there, and every entry tied with the 60th, run all 3, each trial replayed, and its scores appear with the results once the final grades and the checks after them are done.
+    starts_at: "2026-11-21T06:40:00Z"
+    ends_at: "2026-11-21T18:40:00Z"
+    scores: after_finalize
+
+# The scorer's six scored columns, in display order (scorer/columns.ts SCORE_COLUMNS): the composite score is the
+# rank column; the three arms are shown beside it; perf_p50_us is the efficiency tie-break, lower first (an exact
+# score tie goes to the faster measured median); working is the agent working column (AGENT_WORKING_COLUMN).
+leaderboard:
+  title: Results
+  primary_index: 0
+  tie_break_index: 4
+  placements: live
+  columns:
+    - {key: score, title: Score, index: 0, sorting: desc, precision: 0}
+    - {key: feature, title: Conformance, index: 1, sorting: desc, precision: 0}
+    - {key: agent, title: Agent native, index: 2, sorting: desc, precision: 0}
+    - {key: perf, title: Speed points, index: 3, sorting: desc, precision: 0}
+    - {key: perf_p50_us, title: Median time (us), index: 4, sorting: asc, precision: 0}
+    - {key: working, title: Works, index: 5, sorting: desc, precision: 0}
+
+# At most 5 submissions a day and 10 in all, per entrant (server/routes/submissions.ts quota). The rules and the
+# description quote both; change them together.
+submission_rule:
+  rule: Force_Last
+  max_per_day: 5
+  max_total: 10
+  transcripts_required: true
+  strategy_note_required: false
+  license: osi
+  repo_created_after_open: true
+  house_only: false
+
+# The release's twenty-place table: $100, $70, $50, $20 for 4th to 10th, $14 for 11th to 20th, $500 in all
+# (tests/unit/catalogue.test.ts RELEASE_PLACE_PRIZES). One place per entrant, paid by the house in USDC on Solana.
+prizes:
+  - {kind: placement, place: 1, amount_usd: 100, title: 1st place}
+  - {kind: placement, place: 2, amount_usd: 70, title: 2nd place}
+  - {kind: placement, place: 3, amount_usd: 50, title: 3rd place}
+  - {kind: placement, place: 4, amount_usd: 20, title: 4th place}
+  - {kind: placement, place: 5, amount_usd: 20, title: 5th place}
+  - {kind: placement, place: 6, amount_usd: 20, title: 6th place}
+  - {kind: placement, place: 7, amount_usd: 20, title: 7th place}
+  - {kind: placement, place: 8, amount_usd: 20, title: 8th place}
+  - {kind: placement, place: 9, amount_usd: 20, title: 9th place}
+  - {kind: placement, place: 10, amount_usd: 20, title: 10th place}
+  - {kind: placement, place: 11, amount_usd: 14, title: 11th place}
+  - {kind: placement, place: 12, amount_usd: 14, title: 12th place}
+  - {kind: placement, place: 13, amount_usd: 14, title: 13th place}
+  - {kind: placement, place: 14, amount_usd: 14, title: 14th place}
+  - {kind: placement, place: 15, amount_usd: 14, title: 15th place}
+  - {kind: placement, place: 16, amount_usd: 14, title: 16th place}
+  - {kind: placement, place: 17, amount_usd: 14, title: 17th place}
+  - {kind: placement, place: 18, amount_usd: 14, title: 18th place}
+  - {kind: placement, place: 19, amount_usd: 14, title: 19th place}
+  - {kind: placement, place: 20, amount_usd: 14, title: 20th place}
+
+limits:
+  cpus: 2
+  memory_mb: 1024
+  pids: 256
+  wall_budget_sec: 900
+
+# The efficiency view's authorship gate (bot-01's 0.80): no prize rides on that view.
+min_authored_coverage: 0.8
+
+# A placement prize needs a score above the gate baseline's: the reference forge's, entered as a house entry 4 hours
+# before the deadline and flagged baseline (server/payouts/baseline.ts). An agent/v1 run's rank-key value is a mean
+# over the final's 3 shared instances, so the gate is the 90% paired t-interval of the per-instance lead above 0
+# besides the value rule: an interval that reaches 0 is a statistical tie, and a tie does not beat it. The final's
+# cut is cut-exempt for the baseline (server/grading/final-cut.ts cutExempt): it always goes on to all 3 instances
+# whatever it scored, and takes none of the 60 contender seats.
+prize_requires_beating_baseline: true
+
+# A house entry or baseline that finishes in a paid place holds the place, unpaid, and no entry moves up: the rules'
+# Prizes section says so, word for word (contest-design.mdc). The baseline never beats itself, so the reference forge
+# holds the place it finishes in rather than taking a prize.
+house_holds_places: true
+
+# Open and public, so every automation job sweeps it: lifecycle locks and resolves at the deadline, and the
+# fund-at-open job moves the whole $500 into the escrow when it opens (automation.escrow: at_open).
+automation:
+  lifecycle: true
+  payouts: auto
+  escrow: at_open

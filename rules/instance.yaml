@@ -1,0 +1,41 @@
+# Beacon-drawn trial instances (agent-fun/instance-trials/v1): the generator (generator_sha256) draws one instance per trial t,
+# seed = sha256("agent-fun/instance/trial/v1" || u32be(k) || u32be(t) || the drand round's 48-byte signature).
+# practice: k = 0, trials t = 0, 1, 2, ... from a round emitted before the competition opens (public).
+# scored: k = 0 (k >= 1 a redraw), trials t = 0 to instances - 1 from the first round emitted at or after the final phase starts.
+schema: agent-fun/instance-trials/v1
+generator_sha256: "9cdec0265dc8881ad3c290ab4df3bee3979d4d7f6aa100157bd1081512932c9d"
+practice:
+  beacon:
+    scheme: drand-quicknet
+    chain: "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971"
+    round: 33447412
+    at: "2026-10-28T00:00:00.000Z"
+  signature: "a8159aef98227c2cd0d45cd3ce5d2211171d3fd4dd8f174d65b36d7fa005211084e61d2b9988cb8026a98a0aa4f00fe8"
+  trials:
+    - t: 0
+      seed: "371c9c0e0aace432ba4ad68194bada8740441c8bc3b848df49ffee68e7e9a38a"
+      input_sha256: "cf50f3ccdf8be0a8f11118f44459630dd465937668bc0e3ce4de4dd70665a9d2"
+      reference_sha256: "d714110b98756abf21d960f64a43647ad3bd33aae335d3199818e60557cfe9de"
+      instance_sha256: "2dbde1d1494af3cbb4bfd5e6cd44b3dbab56c5cc7d158ebb9313d9d93b7737fc"
+    - t: 1
+      seed: "00ac170e62b2ab91ef52dc4a85e3fc3a448428e72f9845ed226ecfe243a92b2b"
+      input_sha256: "42ec44980f81542fa6e280194a8f523b7de541f0926b81613c8ff9f2d0127a00"
+      reference_sha256: "743b4f2375c8b56beb4848785a4097276de2415815aa3b18744c6fff9169de6b"
+      instance_sha256: "31709a3ffeef44c0ebe45109826d1c30e603495732744c2badf6e94dd89fabfa"
+    - t: 2
+      seed: "3abbf0366299e98cb62d92f6eeb429baa6764fa6617808cfce4b979de92a8b21"
+      input_sha256: "bbcc8d069a0b07382f6e666ad18b76e05d9996bf7c33f6ae1918cfcf8e492412"
+      reference_sha256: "63d3308d4cda5f49645878e4017ede50c1cd7fbfdeef7e3c585626b2ca822994"
+      instance_sha256: "53cdb951ca278437c50c7e7b8497f7e64c67e8086483898cd6e290f22227c0ac"
+scored:
+  beacon:
+    scheme: drand-quicknet
+    chain: "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971"
+    round: 34146612
+    at: "2026-11-21T06:40:00.000Z"
+  instances: 3
+limits:
+  cpus: 2
+  memory_mb: 1024
+  pids: 256
+  wall_budget_sec: 900
